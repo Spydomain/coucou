@@ -13,7 +13,7 @@ use serde_json::{json, Value};
 use tauri::AppHandle;
 
 use crate::settings::Settings;
-use crate::{claude, local_chat, openai_compat, secrets};
+use crate::{claude, local_chat, opencode, openai_compat, secrets};
 
 pub const ANTHROPIC: &str = "anthropic";
 
@@ -59,6 +59,9 @@ struct Conversation {
     native: Vec<Value>,
     /// `{"role", "content": text}` turns, the same whoever answered.
     plain: Vec<Value>,
+    /// The OpenCode session that owns the native conversation. It only lives
+    /// for this in-memory chat; reset or switching provider starts fresh.
+    opencode_session: Option<String>,
 }
 
 /// What a provider needs to build one turn.
@@ -85,12 +88,30 @@ impl Chat {
         if c.owner.as_deref() != Some(provider) {
             c.native = c.plain.clone();
             c.owner = Some(provider.to_string());
+            c.opencode_session = None;
         }
         Turn {
             epoch: c.epoch,
             provider: provider.to_string(),
             first: c.plain.is_empty(),
             history: c.native.clone(),
+        }
+    }
+
+    /// The remote OpenCode session for this turn, if the same conversation
+    /// still owns it. This prevents a late answer from reviving a session after
+    /// reset or a provider switch.
+    pub fn opencode_session(&self, turn: &Turn) -> Option<String> {
+        let c = self.inner.lock().unwrap();
+        (c.epoch == turn.epoch && c.owner.as_deref() == Some(turn.provider.as_str()))
+            .then(|| c.opencode_session.clone())
+            .flatten()
+    }
+
+    pub fn remember_opencode_session(&self, turn: &Turn, session: String) {
+        let mut c = self.inner.lock().unwrap();
+        if c.epoch == turn.epoch && c.owner.as_deref() == Some(turn.provider.as_str()) {
+            c.opencode_session = Some(session);
         }
     }
 
@@ -213,6 +234,9 @@ pub async fn send(
     if let Some(p) = openai_compat::provider(provider) {
         return openai_compat::send(chat, p, &model, query, context).await;
     }
+    if provider == "opencode" {
+        return opencode::send(app, chat, &model, query, context).await;
+    }
     if let Some(server) = local_chat::server(settings, provider) {
         return local_chat::send(app, chat, &server, &model, query, context).await;
     }
@@ -231,6 +255,9 @@ pub async fn models(settings: &Settings, provider: &str) -> Result<Vec<ModelInfo
     if let Some(p) = openai_compat::provider(provider) {
         let key = secrets::get(p.key).ok_or_else(no_key)?;
         return openai_compat::models(p, &key).await;
+    }
+    if provider == "opencode" {
+        return opencode::models().await;
     }
     if let Some(server) = local_chat::server(settings, provider) {
         return local_chat::models(&server).await;

@@ -52,7 +52,8 @@ pub struct Settings {
     /// Addresses of the model servers once connected; empty means not connected.
     pub ollama_url: String,
     pub lmstudio_url: String,
-    /// OpenCode server address (OpenAI-compatible).
+    /// Legacy OpenCode address. The installed v2 service is discovered from
+    /// its authenticated local registration instead.
     pub opencode_url: String,
     /// Any other OpenAI-compatible server; its key, if any, is in the keychain.
     pub custom_url: String,

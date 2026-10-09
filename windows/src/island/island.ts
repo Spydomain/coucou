@@ -12,7 +12,7 @@ import {
 } from "../core/layout";
 import { Sound } from "../core/sound";
 import { State } from "../core/state";
-import { SPOTIFY_ID, islandDances } from "../core/spotify";
+import { SPOTIFY_ID, Spotify, islandDances } from "../core/spotify";
 import { BotEngine, hexToRGB } from "../mochi/engine";
 import { Greeting } from "../mochi/greeting";
 import { createMiniBot, pruneMiniBots, syncMiniBotStates, tickMiniBots } from "../mochi/minibots";
@@ -75,6 +75,7 @@ export class Island {
   private greeting = new Greeting();
   private greetingShown = false;
   private seasons = new SeasonCache();
+  private lastMusicSignature = "";
 
   private running = false;
   private lastFrame = 0;
@@ -1144,10 +1145,11 @@ export class Island {
     const showOutfit = mainFocused || State.mode !== "expanded" || inWardrobe;
     const outfit = State.wardrobePreview ?? this.seasons.get(parseOutfit(State.settings.mochiOutfit));
     this.engine.setOutfit(showOutfit ? outfit : "none", !inWardrobe);
+    this.syncMusicMood();
     // Dances while music plays: always in the compact island, expanded only on
     // the music pill's card (BotCanvasView, macOS). Asked every frame.
     this.engine.setDancing(islandDances({
-      music: State.spotifyPlaying,
+      music: State.musicPlaying,
       state: State.effectiveState,
       mode: State.mode,
       view: State.view,
@@ -1161,6 +1163,34 @@ export class Island {
     this.engine.applyDance(ctx, w, hCss);
     this.engine.draw(ctx, w, hCss);
     ctx.restore();
+  }
+
+  /** Give each newly playing track a small, readable reaction from Mochi. */
+  private syncMusicMood() {
+    const media = State.integrations.integration_media?.data;
+    const players = Array.isArray(media?.players) ? media.players as Array<Record<string, unknown>> : [];
+    const activeBus = String(media?.activeBus ?? "");
+    const player = players.find((p) => String(p.bus ?? "") === activeBus) ?? players.find((p) => p.playing === true);
+    const spotifyTrack = Spotify.state.track;
+    const title = String(player?.title ?? spotifyTrack?.title ?? "");
+    const artist = String(player?.artist ?? spotifyTrack?.artist ?? "");
+    const playing = State.musicPlaying && Boolean(title || artist);
+    const signature = playing ? `${title}\u0000${artist}` : "";
+    if (!signature) {
+      this.lastMusicSignature = "";
+      return;
+    }
+    if (signature === this.lastMusicSignature) return;
+    this.lastMusicSignature = signature;
+    const words = `${title} ${artist}`.toLowerCase();
+    const mood: BotEmoteName = /love|heart|romantic|afreen|kiss|sweet/.test(words)
+      ? "love"
+      : /sad|cry|alone|雨|rain/.test(words)
+        ? "yawn"
+        : /rock|metal|fire|energy|dance|party/.test(words)
+          ? "surprised"
+          : "happy";
+    this.engine.triggerEmote(mood, 1.8);
   }
 
   /** BotCanvasView.lookX / lookY — tanh of the distance to the bot. */

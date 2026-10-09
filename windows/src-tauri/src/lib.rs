@@ -18,6 +18,7 @@ mod local_chat;
 mod log;
 mod media;
 mod net;
+mod opencode;
 mod openai_compat;
 mod pipe;
 mod platform;

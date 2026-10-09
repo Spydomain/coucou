@@ -131,6 +131,7 @@ export interface Settings {
   ollamaUrl: string;
   lmstudioUrl: string;
   customUrl: string;
+  /** Legacy setting; the installed OpenCode service is auto-discovered. */
   opencodeUrl: string;
   /** Global shortcuts the user changed, by action id (see core/shortcuts.ts). */
   shortcuts: Bindings;
@@ -283,6 +284,21 @@ class AppState {
   /** Spotify plays on a declared pill: Mochi dances (Linux; never on Windows yet). */
   get spotifyPlaying(): boolean {
     return musicPlaying(Spotify.state, sanitizeDeclared(this.settings, this.os).activeIntegrations);
+  }
+
+  /** Any declared media player is playing, so the main Mochi can react too. */
+  get mediaPlaying(): boolean {
+    if (!sanitizeDeclared(this.settings, this.os).activeIntegrations.includes("integration_media")) return false;
+    const data = this.integrations.integration_media?.data;
+    const players = Array.isArray(data?.players) ? data.players as Array<Record<string, unknown>> : [];
+    const activeBus = String(data?.activeBus ?? "");
+    const active = players.find((p) => String(p.bus ?? "") === activeBus) ?? players.find((p) => p.playing === true);
+    return active?.playing === true;
+  }
+
+  /** Unified music state used by Mochi and desktop reactions. */
+  get musicPlaying(): boolean {
+    return this.spotifyPlaying || this.mediaPlaying;
   }
 
   get otherTasks(): AgentTask[] {

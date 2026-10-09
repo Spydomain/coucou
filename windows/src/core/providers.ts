@@ -28,7 +28,9 @@ export const PROVIDERS: readonly ProviderDef[] = [
   { id: "google", name: "Google", accent: "#4285F4", key: "google-api-key", urlField: null, defaultModel: "gemini-2.0-flash", prefer: "flash" },
   { id: "openai", name: "OpenAI", accent: "#10A37F", key: "openai-api-key", urlField: null, defaultModel: "gpt-4o", prefer: "mini" },
   { id: "openrouter", name: "OpenRouter", accent: "#6467F2", key: "openrouter-api-key", urlField: null, defaultModel: "openrouter/auto", prefer: null },
-  { id: "opencode", name: "OpenCode", accent: "#1DB954", key: null, urlField: "opencodeUrl", defaultModel: "", prefer: null },
+  // The installed service is discovered from OpenCode's own registration,
+  // including its rotating local port and credentials. It is not OpenAI-compatible.
+  { id: "opencode", name: "OpenCode", accent: "#1DB954", key: null, urlField: null, defaultModel: "opencode/nemotron-3-ultra-free", prefer: "opencode/nemotron-3-ultra" },
   { id: "ollama", name: "Ollama", accent: "#FACC15", key: null, urlField: "ollamaUrl", defaultModel: "", prefer: null },
   { id: "lmstudio", name: "LM Studio", accent: "#A3E635", key: null, urlField: "lmstudioUrl", defaultModel: "", prefer: null },
   { id: "custom", name: N_("Custom server"), accent: "#C0C4CC", key: null, urlField: "customUrl", defaultModel: "", prefer: null },

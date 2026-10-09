@@ -3360,6 +3360,72 @@
    "pt-BR": "Só um arquivo solto na ilha pode ser enviado com uma pergunta.",
    "ru": "С вопросом можно отправить только файл, перетащенный на остров.",
    "id": "Hanya file yang dijatuhkan ke pulau yang bisa dikirim bersama pertanyaan."
+  },
+  "OpenCode is not running.": {
+   "zh-Hans": "OpenCode 未运行。",
+   "hi": "OpenCode चल नहीं रहा है।",
+   "es": "OpenCode no se está ejecutando.",
+   "ar": "OpenCode غير قيد التشغيل.",
+   "fr": "OpenCode n’est pas en cours d’exécution.",
+   "bn": "OpenCode চলছে না।",
+   "pt-BR": "O OpenCode não está em execução.",
+   "ru": "OpenCode не запущен.",
+   "id": "OpenCode tidak berjalan."
+  },
+  "Restart OpenCode and try again.": {
+   "zh-Hans": "重启 OpenCode 后重试。",
+   "hi": "OpenCode को फिर से शुरू करके दोबारा कोशिश करें।",
+   "es": "Reinicia OpenCode e inténtalo de nuevo.",
+   "ar": "أعِد تشغيل OpenCode ثم حاول مرة أخرى.",
+   "fr": "Redémarre OpenCode, puis réessaie.",
+   "bn": "OpenCode পুনরায় চালু করে আবার চেষ্টা করুন।",
+   "pt-BR": "Reinicie o OpenCode e tente novamente.",
+   "ru": "Перезапустите OpenCode и попробуйте снова.",
+   "id": "Mulai ulang OpenCode lalu coba lagi."
+  },
+  "OpenCode could not connect.": {
+   "zh-Hans": "无法连接到 OpenCode。",
+   "hi": "OpenCode से कनेक्ट नहीं हो सका।",
+   "es": "No se pudo conectar con OpenCode.",
+   "ar": "تعذر الاتصال بـ OpenCode.",
+   "fr": "Impossible de se connecter à OpenCode.",
+   "bn": "OpenCode-এ সংযোগ করা যায়নি।",
+   "pt-BR": "Não foi possível conectar ao OpenCode.",
+   "ru": "Не удалось подключиться к OpenCode.",
+   "id": "Tidak dapat terhubung ke OpenCode."
+  },
+  "That model is not available. Pick another one.": {
+   "zh-Hans": "该模型不可用。请选择其他模型。",
+   "hi": "वह मॉडल उपलब्ध नहीं है। दूसरा चुनें।",
+   "es": "Ese modelo no está disponible. Elige otro.",
+   "ar": "هذا النموذج غير متاح. اختر نموذجًا آخر.",
+   "fr": "Ce modèle n’est pas disponible. Choisis-en un autre.",
+   "bn": "মডেলটি উপলভ্য নয়। অন্য একটি বেছে নিন।",
+   "pt-BR": "Esse modelo não está disponível. Escolha outro.",
+   "ru": "Эта модель недоступна. Выберите другую.",
+   "id": "Model itu tidak tersedia. Pilih yang lain."
+  },
+  "OpenCode has no enabled models.": {
+   "zh-Hans": "OpenCode 没有已启用的模型。",
+   "hi": "OpenCode में कोई सक्षम मॉडल नहीं है।",
+   "es": "OpenCode no tiene modelos habilitados.",
+   "ar": "لا توجد نماذج مفعّلة في OpenCode.",
+   "fr": "OpenCode n’a aucun modèle activé.",
+   "bn": "OpenCode-এ কোনো সক্রিয় মডেল নেই।",
+   "pt-BR": "O OpenCode não tem modelos habilitados.",
+   "ru": "В OpenCode нет включённых моделей.",
+   "id": "OpenCode tidak memiliki model yang diaktifkan."
+  },
+  "OpenCode took too long to answer.": {
+   "zh-Hans": "OpenCode 响应时间过长。",
+   "hi": "OpenCode ने जवाब देने में बहुत समय लिया।",
+   "es": "OpenCode tardó demasiado en responder.",
+   "ar": "استغرق OpenCode وقتًا طويلاً للرد.",
+   "fr": "OpenCode a mis trop longtemps à répondre.",
+   "bn": "OpenCode উত্তর দিতে অনেক বেশি সময় নিয়েছে।",
+   "pt-BR": "O OpenCode demorou demais para responder.",
+   "ru": "OpenCode отвечал слишком долго.",
+   "id": "OpenCode terlalu lama menjawab."
   }
  }
 }

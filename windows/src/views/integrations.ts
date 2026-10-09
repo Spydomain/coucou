@@ -488,8 +488,10 @@ function systemCard(): HTMLElement {
 // ── Media ─────────────────────────────────────────────────────────────────────
 
 /** A small round transport button, the same shape the Spotify card uses. */
-function mediaButton(icon: string, onclick: () => void): HTMLElement {
-  return h("button", { class: "np-icon", onclick }, svg(icon, 11));
+function mediaButton(icon: string, label: string, onclick: () => void): HTMLElement {
+  return h("button", {
+    class: "np-icon", type: "button", title: label, "aria-label": label, onclick,
+  }, svg(icon, 12));
 }
 
 function mediaCard(): HTMLElement {
@@ -514,41 +516,71 @@ function mediaCard(): HTMLElement {
   const artist = String(active.artist ?? "");
   const album = String(active.album ?? "");
   const playing = active.playing === true;
+  const playLabel = playing ? "Pause playback" : "Play playback";
 
-  // Player selector
+  // Custom picker: native selects can grow to the height of their popup on
+  // Linux/WebKit, which used to push the transport row out of the card.
+  let pickerOpen = false;
+  const pickerLabel = h("span", { text: String(active.name ?? "Media") });
+  const pickerMenu = h("div", { class: "media-picker-menu" });
   const selector = h(
-    "select",
-    {
-      class: "int-select",
-      style: "margin-bottom:8px;padding:4px 8px;border-radius:6px;border:1px solid rgba(255,255,255,0.15);background:rgba(0,0,0,0.3);color:var(--ink);font:inherit",
-      value: activeBus,
-      onchange: (e: Event) => void Bridge.mediaSetPlayer((e.target as HTMLSelectElement).value),
-    },
-    ...players.map((p) =>
-      h("option", { value: String(p.bus ?? ""), text: `${String(p.name ?? "")} ${String(p.playing === true ? "▶" : "")}` }),
-    ),
+    "div",
+    { class: "media-picker" },
+    h("button", {
+      class: "media-picker-button",
+      type: "button",
+      title: "Select media player",
+      "aria-label": "Select media player",
+      onclick: (e: Event) => {
+        e.stopPropagation();
+        pickerOpen = !pickerOpen;
+        pickerMenu.classList.toggle("open", pickerOpen);
+      },
+    }, pickerLabel, svg(ICONS.chevronUpDown, 12, { stroke: 1.8 })),
+    pickerMenu,
   );
+  for (const p of players) {
+    const bus = String(p.bus ?? "");
+    const option = h("button", {
+      type: "button",
+      class: "media-picker-option",
+      text: `${String(p.name ?? "")} ${p.playing === true ? "▶" : ""}`,
+      onclick: (e: Event) => {
+        e.stopPropagation();
+        pickerOpen = false;
+        pickerMenu.classList.remove("open");
+        pickerLabel.textContent = String(p.name ?? "Media");
+        void Bridge.mediaSetPlayer(bus);
+      },
+    });
+    pickerMenu.append(option);
+  }
 
   const text = h(
     "div",
-    { style: "display:flex;flex-direction:column;gap:1px;min-width:0;padding-top:2px" },
+    { class: "media-track" },
     h("span", { class: "np-title", text: title || "—" }),
     h("span", { class: "np-sub", text: [artist, album, active.name].filter(Boolean).join(" · ") }),
   );
 
   const controls = h(
     "div",
-    { class: "np-buttons", style: "padding-top:6px" },
-    mediaButton(ICONS.backward, () => void Bridge.mediaControl("previous")),
+    { class: "np-buttons media-controls" },
+    mediaButton(ICONS.backward, "Previous track", () => void Bridge.mediaControl("previous")),
     h(
       "button",
-      { class: "np-play", onclick: () => void Bridge.mediaControl("playPause") },
-      svg(playing ? ICONS.pause : ICONS.play, 9),
+      {
+        class: "np-play", type: "button", title: playLabel,
+        "aria-label": playLabel,
+        onclick: () => void Bridge.mediaControl("playPause"),
+      },
+      svg(playing ? ICONS.pause : ICONS.play, 11),
     ),
-    mediaButton(ICONS.forward, () => void Bridge.mediaControl("next")),
+    mediaButton(ICONS.forward, "Next track", () => void Bridge.mediaControl("next")),
   );
 
-  return h("div", { class: "int-card" }, head, selector, text, controls);
+  return h("div", { class: "int-card media-card" },
+    h("div", { class: "media-top" }, head, selector), text, controls);
 }
 
 // ── Dispatch ──────────────────────────────────────────────────────────────────

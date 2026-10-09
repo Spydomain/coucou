@@ -1,294 +1,183 @@
 #!/usr/bin/env bash
-# coucou-full-setup.sh — Complete automated setup for new devices
-# Run once: curl -fsSL <url> | bash  OR  ./coucou-full-setup.sh
-
+# Install Coucou and its build/runtime dependencies on a Linux desktop.
+# Run from a checkout, or pipe this file to bash to clone a fresh checkout.
 set -euo pipefail
 
-# ── Config ──────────────────────────────────────────────────────────────────────
 REPO_URL="https://github.com/Louis-CFM/coucou.git"
-COUCOU_DIR="$HOME/coucou"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+if [[ -f "$SCRIPT_DIR/windows/package-lock.json" ]]; then
+  COUCOU_DIR="$SCRIPT_DIR"
+else
+  COUCOU_DIR="${COUCOU_DIR:-$HOME/coucou}"
+fi
 WINDOWS_DIR="$COUCOU_DIR/windows"
 BINARY="$WINDOWS_DIR/target/release/coucou"
-DESKTOP_FILE="$HOME/.local/share/applications/coucou.desktop"
-AUTOSTART_FILE="$HOME/.config/autostart/coucou.desktop"
-SETTINGS_FILE="$HOME/.config/coucou/settings.json"
+DATA_HOME="${XDG_DATA_HOME:-$HOME/.local/share}"
+CONFIG_HOME="${XDG_CONFIG_HOME:-$HOME/.config}"
+DESKTOP_FILE="$DATA_HOME/applications/coucou.desktop"
+AUTOSTART_FILE="$CONFIG_HOME/autostart/coucou.desktop"
+ICON_FILE="$DATA_HOME/icons/hicolor/128x128/apps/coucou.png"
+SETTINGS_FILE="$CONFIG_HOME/coucou/settings.json"
+PLUGIN_FILE="$CONFIG_HOME/opencode/plugins/coucou.js"
+HOOK_FILE="$DATA_HOME/coucou/bin/coucou-hook"
+NO_LAUNCH=0
+CHECK_ONLY=0
+CHECK_MISSING=0
 
-# Colours
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+for arg in "$@"; do
+  case "$arg" in
+    --no-launch) NO_LAUNCH=1 ;;
+    --check) CHECK_ONLY=1 ;;
+    --build) ;; # Older quickstart entry point accepted this; setup always builds.
+    *) printf 'Unknown option: %s\nUsage: %s [--check] [--no-launch] [--build]\n' "$arg" "$0" >&2; exit 2 ;;
+  esac
+done
 
-log()   { echo -e "${BLUE}[INFO]${NC} $*"; }
-ok()    { echo -e "${GREEN}[OK]${NC} $*"; }
-warn()  { echo -e "${YELLOW}[WARN]${NC} $*"; }
-err()   { echo -e "${RED}[ERR]${NC} $*" >&2; }
+log() { printf '[coucou] %s\n' "$*"; }
+die() { printf '[coucou] ERROR: %s\n' "$*" >&2; exit 1; }
 
-# ── Helper: install packages (Arch/CachyOS) ────────────────────────────────────
-install_packages() {
-  log "Installing system dependencies…"
-  if command -v pacman >/dev/null; then
-    sudo pacman -S --needed --noconfirm \
-      base-devel git nodejs npm rustup \
-      gtk3 webkit2gtk libayatana-appindicator \
-      gst-plugins-good gst-plugins-base gst-plugins-bad \
-      libsoup3 dbus playerctl \
-      2>/dev/null || true
-    # For Wayland/niri
-    sudo pacman -S --needed --noconfirm gtk-layer-shell 2>/dev/null || true
-  elif command -v apt >/dev/null; then
-    sudo apt update && sudo apt install -y \
-      build-essential git nodejs npm curl \
-      libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev \
-      gstreamer1.0-plugins-good gstreamer1.0-plugins-base gstreamer1.0-plugins-bad \
-      libsoup-3.0-dev libdbus-1-dev playerctl \
-      2>/dev/null || true
+missing_packages() {
+  local package
+  for package in "$@"; do
+    if command -v pacman >/dev/null 2>&1; then
+      pacman -Qq "$package" >/dev/null 2>&1 || printf '%s\n' "$package"
+    else
+      dpkg-query -W -f='${Status}' "$package" 2>/dev/null | grep -q '^install ok installed$' || printf '%s\n' "$package"
+    fi
+  done
+}
+
+install_system_dependencies() {
+  local -a packages missing
+  if command -v pacman >/dev/null 2>&1; then
+    packages=(base-devel git curl file pkgconf nodejs npm gtk3 webkit2gtk-4.1
+      gtk-layer-shell libayatana-appindicator librsvg openssl dbus xdotool playerctl
+      gst-plugins-base gst-plugins-good gst-plugins-bad)
+  elif command -v apt-get >/dev/null 2>&1; then
+    packages=(build-essential git curl file pkg-config nodejs npm libgtk-3-dev
+      libwebkit2gtk-4.1-dev libgtk-layer-shell-dev libayatana-appindicator3-dev
+      librsvg2-dev libssl-dev libdbus-1-dev libxdo-dev patchelf playerctl
+      gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad)
   else
-    warn "Unknown package manager — please install dependencies manually"
+    die 'Supported package managers: pacman or apt-get.'
   fi
-}
-
-# ── Helper: setup Rust ─────────────────────────────────────────────────────────
-setup_rust() {
-  log "Setting up Rust toolchain…"
-  if ! command -v rustc >/dev/null; then
-    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-    source "$HOME/.cargo/env"
+  mapfile -t missing < <(missing_packages "${packages[@]}")
+  if ((${#missing[@]} == 0)); then
+    log 'System dependencies are installed.'
+    return
+  fi
+  log "Missing system packages: ${missing[*]}"
+  if ((CHECK_ONLY)); then
+    CHECK_MISSING=1
+    return
+  fi
+  if command -v pacman >/dev/null 2>&1; then
+    sudo pacman -Syu --needed --noconfirm "${missing[@]}"
   else
-    source "$HOME/.cargo/env" 2>/dev/null || true
+    sudo apt-get update
+    sudo apt-get install -y "${missing[@]}"
   fi
-  rustup default stable
-  rustup update stable
 }
 
-# ── Helper: clone or update repo ───────────────────────────────────────────────
-clone_repo() {
-  log "Cloning/updating Coucou repository…"
-  if [[ -d "$COUCOU_DIR/.git" ]]; then
-    cd "$COUCOU_DIR"
-    git fetch origin
-    git reset --hard origin/main
-    git submodule update --init --recursive
+ensure_checkout() {
+  if [[ -f "$WINDOWS_DIR/package-lock.json" ]]; then
+    log "Using existing checkout: $COUCOU_DIR (no git reset or pull)."
+    return
+  fi
+  [[ ! -e "$COUCOU_DIR" ]] || die "Directory exists but is not a Coucou checkout: $COUCOU_DIR"
+  git clone --recursive "$REPO_URL" "$COUCOU_DIR"
+}
+
+ensure_rust() {
+  if ! command -v rustup >/dev/null 2>&1; then
+    log 'Installing Rust using rustup.'
+    curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs | sh -s -- -y --profile minimal
+    export PATH="$HOME/.cargo/bin:$PATH"
+  fi
+  rustup toolchain list | grep -q '^stable-' || rustup toolchain install stable --profile minimal
+  export RUSTUP_TOOLCHAIN=stable
+  # Some distributions put an incompatible system rustc before rustup on PATH.
+  local stable_rustc
+  stable_rustc="$(rustup which rustc --toolchain stable)"
+  export RUSTC="$stable_rustc"
+  export PATH="$(dirname "$stable_rustc"):$HOME/.cargo/bin:$PATH"
+  rustc --version
+}
+
+ensure_opencode() {
+  if ! command -v opencode >/dev/null 2>&1 || [[ "$(opencode --version 2>/dev/null || true)" != *'v2.'* ]]; then
+    log 'Installing OpenCode v2 from its official installer.'
+    curl -fsSL https://opencode.ai/v2/install | bash
+    export PATH="$HOME/.opencode/bin:$HOME/.local/bin:$PATH"
+  fi
+  command -v opencode >/dev/null 2>&1 || die 'OpenCode installation did not provide an opencode command.'
+  [[ "$(opencode --version)" == *'v2.'* ]] || die 'OpenCode v2 is required.'
+  log "OpenCode: $(opencode --version)"
+}
+
+build_app() {
+  log 'Installing JavaScript dependencies and building release app.'
+  (cd "$WINDOWS_DIR" && npm ci && ./node_modules/.bin/tauri build --no-bundle)
+  [[ -x "$BINARY" && -x "$WINDOWS_DIR/target/release/coucou-hook" ]] || die 'Release app or relay is missing.'
+}
+
+install_files() {
+  mkdir -p "$(dirname "$DESKTOP_FILE")" "$(dirname "$AUTOSTART_FILE")" "$(dirname "$ICON_FILE")" "$(dirname "$SETTINGS_FILE")" "$(dirname "$PLUGIN_FILE")" "$(dirname "$HOOK_FILE")"
+  install -m 755 "$WINDOWS_DIR/target/release/coucou-hook" "$HOOK_FILE"
+  install -m 644 "$WINDOWS_DIR/src-tauri/icons/128x128.png" "$ICON_FILE"
+  if [[ ! -e "$SETTINGS_FILE" ]]; then
+    printf '{"chatProvider":"opencode","chatModels":{"opencode":"opencode/nemotron-3-ultra-free"},"language":"en"}\n' > "$SETTINGS_FILE"
+    log 'Created English/OpenCode defaults.'
   else
-    git clone --recursive "$REPO_URL" "$COUCOU_DIR"
+    log 'Preserved existing settings.'
   fi
-}
-
-# ── Helper: install Node deps ──────────────────────────────────────────────────
-install_node_deps() {
-  log "Installing Node.js dependencies…"
-  cd "$WINDOWS_DIR"
-  npm ci
-}
-
-# ── Helper: build release binary ───────────────────────────────────────────────
-build_release() {
-  log "Building release binary (this takes a minute)…"
-  cd "$WINDOWS_DIR"
-  npm run tauri build -- --no-bundle
-  ok "Built: $BINARY"
-}
-
-# ── Helper: create .desktop files ──────────────────────────────────────────────
-create_desktop_files() {
-  log "Creating desktop/autostart entries…"
-  mkdir -p "$(dirname "$DESKTOP_FILE")" "$(dirname "$AUTOSTART_FILE")"
-
-  cat > "$DESKTOP_FILE" <<'EOF'
-[Desktop Entry]
-Name=Coucou
-Comment=AI agent companion — system monitor, media controls, agent hooks
-Exec=/home/spydomain/coucou/windows/target/release/coucou
-Icon=coucou
-Terminal=false
-Type=Application
-Categories=Utility;Development;
-StartupNotify=false
-EOF
-
-  cat > "$AUTOSTART_FILE" <<'EOF'
-[Desktop Entry]
-Type=Application
-Name=Coucou
-Exec=/home/spydomain/coucou/windows/target/release/coucou
-Hidden=false
-NoDisplay=false
-X-GNOME-Autostart-enabled=true
-EOF
-
-  chmod +x "$BINARY" 2>/dev/null || true
-  ok "Desktop entries created"
-}
-
-# ── Helper: write default settings ─────────────────────────────────────────────
-write_settings() {
-  log "Writing default settings…"
-  mkdir -p "$(dirname "$SETTINGS_FILE")"
-  cat > "$SETTINGS_FILE" <<'EOF'
-{
-  "soundEnabled": true,
-  "soundVolume": 0.2,
-  "autoCloseInterval": 15.0,
-  "openOnHover": false,
-  "absenceInterval": 180.0,
-  "activeIntegrations": [
-    "integration_system",
-    "integration_media",
-    "integration_github"
-  ],
-  "mainPill": "agent_codex",
-  "screen": "primary",
-  "islandX": null,
-  "islandY": null,
-  "autostart": true,
-  "hooksInstalled": false,
-  "model": "claude-opus-5",
-  "showPlanInNotch": true,
-  "planRelayInstalled": false,
-  "showCodexPlanInNotch": true,
-  "chatProvider": "opencode",
-  "chatModels": {
-    "opencode": "opencode/nemotron-3-ultra"
-  },
-  "ollamaUrl": "",
-  "lmstudioUrl": "",
-  "opencodeUrl": "http://127.0.0.1:11434",
-  "customUrl": "",
-  "shortcuts": {
-    "toggleIsland": {
-      "keys": "Ctrl+Alt+N",
-      "enabled": false
-    }
-  },
-  "mochiOutfit": "auto",
-  "pillColors": {},
-  "language": "",
-  "desktopMochi": {
-    "onDesktop": false,
-    "spot": null
-  }
-}
-EOF
-  ok "Settings written to $SETTINGS_FILE"
-}
-
-# ── Helper: setup OpenCode hook (optional) ─────────────────────────────────────
-setup_opencode_hook() {
-  log "Setting up OpenCode hook…"
-  mkdir -p "$HOME/.config/opencode/plugins"
-  cat > "$HOME/.config/opencode/plugins/coucou.js" <<'EOF'
-// Coucou plugin for OpenCode — generated by coucou-full-setup.sh
-import { spawn } from 'node:child_process';
-
-const HOOK = "/home/spydomain/.local/share/coucou/bin/coucou-hook";
-const EVENT_MAP = {
-  'session.created': 'SessionStart',
-  'session.idle': 'Stop',
-  'session.error': 'StopFailure',
-  'session.deleted': 'SessionEnd',
-};
-
-function forward(hook_event_name, payload) {
-  try {
-    const p = spawn(HOOK, ['--agent', 'opencode'], {
-      stdio: ['pipe', 'ignore', 'ignore'],
-      detached: process.platform !== 'win32',
-      windowsHide: true,
-    });
-    p.on('error', () => {});
-    p.stdin.on('error', () => {});
-    p.stdin.end(JSON.stringify({ hook_event_name, ...payload }) + '\n');
-    p.unref();
-  } catch {}
-}
-
-export const CoucouPlugin = async ({ directory } = {}) => ({
-  event: async ({ event }) => {
-    const hook_event_name = EVENT_MAP[event?.type];
-    if (!hook_event_name) return;
-    const props = event.properties || {};
-    forward(hook_event_name, {
-      session_id: props.sessionID || props.info?.id || '',
-      cwd: directory || '',
-    });
-  },
-  'tool.execute.before': async (input, output) => {
-    forward('PreToolUse', {
-      session_id: input?.sessionID || '',
-      cwd: directory || '',
-      tool_name: typeof input?.tool === 'string' ? input.tool : '',
-      tool_input: output?.args ?? null,
-    });
-  },
-  'tool.execute.after': async (input) => {
-    forward('PostToolUse', {
-      session_id: input?.sessionID || '',
-      cwd: directory || '',
-      tool_name: typeof input?.tool === 'string' ? input.tool : '',
-    });
-  },
-});
-EOF
-  ok "OpenCode plugin installed"
-}
-
-# ── Helper: launch app ─────────────────────────────────────────────────────────
-launch_app() {
-  log "Launching Coucou…"
-  if pgrep -x coucou >/dev/null; then
-    pkill -x coucou
-    sleep 1
+  if [[ ! -e "$PLUGIN_FILE" ]] || grep -q 'generated by Coucou' "$PLUGIN_FILE"; then
+    node -e 'const fs=require("node:fs"); const [src,dst,hook]=process.argv.slice(1); const js=fs.readFileSync(src,"utf8").replace("{HOOK}",JSON.stringify(hook)); fs.writeFileSync(dst,js,{mode:0o600});' \
+      "$WINDOWS_DIR/scripts/coucou-opencode.js" "$PLUGIN_FILE" "$HOOK_FILE"
+    log 'Installed the OpenCode v2 plugin.'
+  else
+    log "Preserved custom OpenCode plugin: $PLUGIN_FILE"
   fi
-  nohup "$BINARY" >/dev/null 2>&1 &
+  printf '[Desktop Entry]\nType=Application\nName=Coucou\nComment=Desktop companion and media controls\nExec="%s"\nIcon=coucou\nTerminal=false\nCategories=Utility;\n' "$BINARY" > "$DESKTOP_FILE"
+  printf '[Desktop Entry]\nType=Application\nName=Coucou\nExec="%s"\nHidden=false\nX-GNOME-Autostart-enabled=true\n' "$BINARY" > "$AUTOSTART_FILE"
+  log 'Created application menu and autostart entries.'
+}
+
+start_app() {
+  local pid path
+  while read -r pid; do
+    [[ -n "$pid" ]] || continue
+    path="$(readlink "/proc/$pid/exe" 2>/dev/null || true)"
+    case "$path" in
+      "$BINARY"|"$BINARY (deleted)")
+        kill -TERM "$pid"
+        for _ in {1..40}; do kill -0 "$pid" 2>/dev/null || break; sleep 0.25; done
+        kill -0 "$pid" 2>/dev/null && die "Old Coucou process $pid did not stop."
+        ;;
+      *) die "Another Coucou is running at $path; close it before launching this build." ;;
+    esac
+  done < <(pgrep -x coucou || true)
+  nohup "$BINARY" >/dev/null 2>&1 </dev/null &
+  pid=$!
   sleep 2
-  if pgrep -x coucou >/dev/null; then
-    ok "Coucou running (PID $(pgrep -x coucou))"
-  else
-    err "Failed to start — check ~/.local/share/coucou/coucou.log"
-    exit 1
-  fi
+  kill -0 "$pid" 2>/dev/null || die "Coucou failed to start; check $DATA_HOME/coucou/coucou.log"
+  log "Coucou running (PID $pid)."
 }
 
-# ── Main ───────────────────────────────────────────────────────────────────────
-main() {
-  echo
-  echo "╔══════════════════════════════════════════════════════════════╗"
-  echo "║           Coucou Full Automated Setup                        ║"
-  echo "╚══════════════════════════════════════════════════════════════╝"
-  echo
-
-  install_packages
-  setup_rust
-  clone_repo
-  install_node_deps
-  build_release
-  create_desktop_files
-  write_settings
-  setup_opencode_hook
-  launch_app
-
-  echo
-  echo "╔══════════════════════════════════════════════════════════════╗"
-  echo "║  🎉 Setup Complete!                                           ║"
-  echo "╚══════════════════════════════════════════════════════════════╝"
-  echo
-  echo "Coucou is running and will auto-start on graphical login."
-  echo
-  echo "Key files:"
-  echo "  Binary:      $BINARY"
-  echo "  Settings:    $SETTINGS_FILE"
-  echo "  Logs:        ~/.local/share/coucou/coucou.log"
-  echo "  OpenCode hook: ~/.config/opencode/plugins/coucou.js"
-  echo
-  echo "Next steps:"
-  echo "  1. Start your OpenCode server (OpenAI-compatible) on port 11434"
-  echo "     Example: opencode serve --port 11434"
-  echo "  2. Open Coucou chat → provider picker → select 'OpenCode'"
-  echo "  3. Press Ctrl+Alt+N to toggle the island"
-  echo "  4. Drag the top wake strip to reposition the island"
-  echo
-}
-
-# Run
-main "$@"
+install_system_dependencies
+if ((CHECK_ONLY)); then
+  log 'Dependency check complete; no changes made.'
+  exit "$CHECK_MISSING"
+fi
+ensure_checkout
+ensure_rust
+ensure_opencode
+build_app
+install_files
+opencode service start >/dev/null || die 'Could not start the OpenCode background service.'
+if ((NO_LAUNCH)); then
+  log 'Setup complete. Launch skipped (--no-launch).'
+else
+  start_app
+  log 'Setup complete.'
+fi

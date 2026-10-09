@@ -69,6 +69,7 @@ mod linux {
         names
             .into_iter()
             .filter(|n| n.starts_with("org.mpris.MediaPlayer2."))
+            .filter(|n| !n.contains("playerctld"))
             .collect()
     }
 
@@ -89,6 +90,19 @@ mod linux {
         pub album: String,
         pub duration: f64,
         pub playing: bool,
+    }
+
+    /// Keep a valid explicit selection; otherwise prefer what is playing.
+    pub(super) fn chosen_bus(players: &[PlayerInfo], selected: Option<String>) -> Option<String> {
+        selected
+            .filter(|bus| players.iter().any(|p| &p.bus == bus))
+            .or_else(|| {
+                players
+                    .iter()
+                    .find(|p| p.playing)
+                    .map(|p| p.bus.clone())
+                    .or_else(|| players.first().map(|p| p.bus.clone()))
+            })
     }
 
     /// The currently active player (for the frontend).
@@ -142,11 +156,15 @@ mod linux {
                     all.push(info);
                 }
             }
-            let active = ACTIVE_BUS.lock().unwrap().clone();
-            // If no active set, pick the playing one, else first.
-            let active = active.or_else(|| {
-                all.iter().find(|p| p.playing).map(|p| p.bus.clone()).or_else(|| all.first().map(|p| p.bus.clone()))
-            });
+            // Keep the backend's control target in sync with the player shown
+            // by the card. Previously this was only computed for the JSON
+            // response, so the card displayed a player while every transport
+            // command failed because ACTIVE_BUS was still unset.
+            let selected = ACTIVE_BUS.lock().unwrap().clone();
+            // If no active set (or the old player disappeared), pick the
+            // playing one, else the first player.
+            let active = chosen_bus(&all, selected);
+            *ACTIVE_BUS.lock().unwrap() = active.clone();
             Some(json!({
                 "players": all,
                 "activeBus": active,
@@ -193,5 +211,18 @@ mod tests {
         println!("media sample: {v}");
         let players = v.get("players").and_then(|p| p.as_array());
         assert!(players.is_some());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn active_player_falls_back_and_stays_valid() {
+        use super::linux::{chosen_bus, PlayerInfo};
+        let players = vec![
+            PlayerInfo { bus: "brave".into(), name: "Brave".into(), title: String::new(), artist: String::new(), album: String::new(), duration: 0.0, playing: false },
+            PlayerInfo { bus: "vlc".into(), name: "VLC".into(), title: String::new(), artist: String::new(), album: String::new(), duration: 0.0, playing: true },
+        ];
+        assert_eq!(chosen_bus(&players, None).as_deref(), Some("vlc"));
+        assert_eq!(chosen_bus(&players, Some("brave".into())).as_deref(), Some("brave"));
+        assert_eq!(chosen_bus(&players, Some("gone".into())).as_deref(), Some("vlc"));
     }
 }
