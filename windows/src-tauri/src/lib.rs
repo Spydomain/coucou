@@ -24,7 +24,9 @@ mod pipe;
 mod platform;
 #[cfg(target_os = "linux")]
 mod portal;
+mod power;
 mod recap;
+mod security;
 mod secrets;
 mod session_window;
 mod settings;
@@ -635,10 +637,8 @@ fn settings_page_url(app: &AppHandle) -> WebviewUrl {
     WebviewUrl::App("settings.html".into())
 }
 
-/// The settings window is created hidden at launch and only ever shown and
-/// hidden afterwards. A WebView2 window created later — on the main thread or
-/// not — silently comes up blank in this app, so the window that works is the
-/// one that exists before the island's webview does.
+/// Windows creates this hidden at launch: a WebView2 window created later can
+/// come up blank. Linux creates it on first use to avoid an idle WebKit process.
 fn create_settings_window(app: &AppHandle) {
     let url = settings_page_url(app);
     match WebviewWindowBuilder::new(app, "settings", url)
@@ -652,20 +652,30 @@ fn create_settings_window(app: &AppHandle) {
         .build()
     {
         Ok(win) => {
-            // Closing it must only hide it, or it could never be reopened.
-            let hidden = win.clone();
-            win.on_window_event(move |event| {
-                if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                    api.prevent_close();
-                    let _ = hidden.hide();
-                }
-            });
+            // WebView2 must keep its original window. Linux can destroy and
+            // recreate the webview, releasing its memory after Settings closes.
+            #[cfg(not(target_os = "linux"))]
+            {
+                let hidden = win.clone();
+                win.on_window_event(move |event| {
+                    if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                        api.prevent_close();
+                        let _ = hidden.hide();
+                    }
+                });
+            }
+            #[cfg(target_os = "linux")]
+            let _ = win;
         }
         Err(err) => log::line(format!("settings window failed: {err}")),
     }
 }
 
 pub fn show_settings_window(app: &AppHandle) {
+    #[cfg(target_os = "linux")]
+    if app.get_webview_window("settings").is_none() {
+        create_settings_window(app);
+    }
     let Some(win) = app.get_webview_window("settings") else {
         log::line("settings window missing");
         return;
@@ -784,6 +794,8 @@ pub fn run() {
             sounds::custom_sound,
             sounds::reveal_sounds_folder,
             sounds::reload_sounds,
+            power::power_status,
+            security::security_snapshot,
             spotify::spotify_refresh,
             spotify::spotify_control,
             spotify::spotify_open,
@@ -792,7 +804,8 @@ pub fn run() {
         .setup(move |app| {
             let handle = app.handle().clone();
             tray::build(&handle)?;
-            // Before the island: see create_settings_window.
+            // WebView2 needs this before the island; WebKit can build on demand.
+            #[cfg(not(target_os = "linux"))]
             create_settings_window(&handle);
             // Same rule for Mochi's desktop window.
             desktop::setup(&handle);

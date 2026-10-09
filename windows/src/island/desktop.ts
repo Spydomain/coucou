@@ -12,6 +12,7 @@ import {
   DESKTOP_EVENTS, DesktopMochiController, alertActive, type DesktopSnapshot,
 } from "../mochi/desktop-logic";
 import { SeasonCache, parseOutfit } from "../mochi/wardrobe";
+import { companionMoodState } from "./wellbeing";
 
 /** Label of the desktop Mochi's window (desktop.rs LABEL). */
 const WINDOW = "mochi";
@@ -38,6 +39,7 @@ export class DesktopLink {
   private pendingCarry: { x: number; y: number } | null = null;
   private carryFrame = false;
   private host: DesktopHost;
+  private nightMood = false;
 
   constructor(host: DesktopHost) {
     this.host = host;
@@ -158,20 +160,30 @@ export class DesktopLink {
 
   // ── State → desktop window ──────────────────────────────────────────────────
 
+  setNightMood(on: boolean) {
+    if (this.nightMood === on) return;
+    this.nightMood = on;
+    if (this.supported) this.sync();
+  }
+
+  private botMoodState() {
+    return companionMoodState(State.effectiveState, this.nightMood, State.musicPlaying);
+  }
+
   private sync() {
     this.controller.updateAlert(alertActive(State));
-    this.controller.updateState(State.effectiveState);
+    this.controller.updateState(this.botMoodState());
     this.push();
   }
 
   private push() {
     const snapshot: DesktopSnapshot = {
-      state: State.effectiveState,
+      state: this.botMoodState(),
       outfit: State.wardrobePreview ?? this.seasons.get(parseOutfit(State.settings.mochiOutfit)),
       soundEnabled: State.settings.soundEnabled,
       soundVolume: State.settings.soundVolume,
       paused: State.paused,
-      dancing: desktopDances(State.musicPlaying, State.effectiveState),
+      dancing: desktopDances(State.musicPlaying, this.botMoodState()),
     };
     const key = JSON.stringify(snapshot);
     if (key === this.pushed) return;

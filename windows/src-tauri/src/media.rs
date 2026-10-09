@@ -88,6 +88,8 @@ mod linux {
         pub title: String,
         pub artist: String,
         pub album: String,
+        pub genre: String,
+        pub bpm: Option<f64>,
         pub duration: f64,
         pub playing: bool,
     }
@@ -141,6 +143,8 @@ mod linux {
             title: track.as_ref().map(|t| t.title.clone()).unwrap_or_default(),
             artist: track.as_ref().map(|t| t.artist.clone()).unwrap_or_default(),
             album: track.as_ref().map(|t| t.album.clone()).unwrap_or_default(),
+            genre: track.as_ref().map(|t| t.genre.clone()).unwrap_or_default(),
+            bpm: track.as_ref().and_then(|t| t.bpm),
             duration: track.as_ref().map(|t| t.duration).unwrap_or(0.0),
             playing: status(&map) == "Playing",
         })
@@ -218,8 +222,8 @@ mod tests {
     fn active_player_falls_back_and_stays_valid() {
         use super::linux::{chosen_bus, PlayerInfo};
         let players = vec![
-            PlayerInfo { bus: "brave".into(), name: "Brave".into(), title: String::new(), artist: String::new(), album: String::new(), duration: 0.0, playing: false },
-            PlayerInfo { bus: "vlc".into(), name: "VLC".into(), title: String::new(), artist: String::new(), album: String::new(), duration: 0.0, playing: true },
+            PlayerInfo { bus: "brave".into(), name: "Brave".into(), title: String::new(), artist: String::new(), album: String::new(), genre: String::new(), bpm: None, duration: 0.0, playing: false },
+            PlayerInfo { bus: "vlc".into(), name: "VLC".into(), title: String::new(), artist: String::new(), album: String::new(), genre: String::new(), bpm: None, duration: 0.0, playing: true },
         ];
         assert_eq!(chosen_bus(&players, None).as_deref(), Some("vlc"));
         assert_eq!(chosen_bus(&players, Some("brave".into())).as_deref(), Some("brave"));

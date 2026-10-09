@@ -179,8 +179,8 @@ export function stepDanceLevel(level: number, dancing: boolean, dt: number): num
  * The 112-BPM bounce at `seconds`, for a body of radius R and a dance `level`
  * (0…1): a sideways sway, a hop, a tilt, and a squash on landing.
  */
-export function danceTransform(seconds: number, level: number, R: number) {
-  const beat = (seconds * 112) / 60;
+export function danceTransform(seconds: number, level: number, R: number, bpm = 112) {
+  const beat = (seconds * bpm) / 60;
   const hop = Math.abs(Math.sin(Math.PI * beat));
   const land = Math.pow(1 - hop, 6);
   return {
@@ -229,6 +229,7 @@ export class BotEngine {
   /** Dancing to music; `dancingLevel` follows it, 0→1 in 0.3 s, 1→0 in 0.5 s. */
   isDancing = false;
   dancingLevel = 0;
+  danceBpm = 112;
 
   // Mouth spring (fraction of R)
   slotH = 0; slotHTarget = 0; slotHVel = 0; isChewing = false;
@@ -757,7 +758,7 @@ export class BotEngine {
     const R = W * 0.3;
     const px = W / 2 + this.ox * R;
     const py = H / 2 + this.particleOverhang / 2 + this.oy * R + R * 0.06 + R * 0.88;
-    const d = danceTransform(now(), this.dancingLevel, R);
+    const d = danceTransform(now(), this.dancingLevel, R, this.danceBpm);
     x.translate(px + d.dx, py + d.dy);
     x.rotate(d.rotate);
     x.scale(d.sx, d.sy);

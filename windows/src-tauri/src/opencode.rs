@@ -51,6 +51,26 @@ fn service_file() -> std::path::PathBuf {
     crate::platform::home_dir().join(".local/state/opencode/service.json")
 }
 
+fn executable() -> Option<std::path::PathBuf> {
+    crate::platform::find_on_path("opencode").or_else(|| {
+        let home = crate::platform::home_dir();
+        [home.join(".opencode/bin/opencode"), home.join(".local/bin/opencode")]
+            .into_iter().find(|p| p.is_file())
+    })
+}
+
+async fn start_service() -> Result<(), String> {
+    let exe = executable().ok_or_else(|| t("OpenCode is not running."))?;
+    let mut command = tokio::process::Command::new(exe);
+    command.args(["service", "start"]).kill_on_drop(true);
+    let result = tokio::time::timeout(
+        Duration::from_secs(15),
+        command.output(),
+    ).await.map_err(|_| t("OpenCode took too long to answer."))?
+        .map_err(|_| t("OpenCode could not connect."))?;
+    if result.status.success() { Ok(()) } else { Err(t("OpenCode could not connect.")) }
+}
+
 fn service() -> Result<Service, String> {
     let bytes = std::fs::read(service_file()).map_err(|_| t("OpenCode is not running."))?;
     let value: Value = serde_json::from_slice(&bytes)
@@ -130,6 +150,7 @@ fn model_ref(models: &[AvailableModel], chosen: &str) -> Result<ModelRef, String
 /// Models currently exposed by the installed OpenCode service. IDs stay in
 /// OpenCode's own `provider/model` format so the picker and service agree.
 pub async fn models() -> Result<Vec<ModelInfo>, String> {
+    start_service().await?;
     let service = service()?;
     let mut models = request_models(&service).await?;
     models.sort_by(|a, b| model_key(a).cmp(&model_key(b)));
@@ -175,7 +196,7 @@ fn run_result(stdout: &[u8]) -> Result<(String, String), String> {
 /// as an arbitrary HTTP client. This is required for OpenCode Zen's free tier
 /// and keeps all provider authentication inside OpenCode.
 async fn run(model: &ModelRef, session: Option<&str>, text: String) -> Result<(String, String), String> {
-    let mut command = tokio::process::Command::new("opencode");
+    let mut command = tokio::process::Command::new(executable().ok_or_else(|| t("OpenCode is not running."))?);
     command.arg("run")
         .arg("--format").arg("json")
         .arg("--model").arg(model_ref_key(model))
@@ -209,16 +230,25 @@ pub async fn send(
     context: Option<ChatContext>,
 ) -> Result<ChatReply, String> {
     let turn = chat.begin("opencode");
-    let service = service()?;
-    let model = model_ref(&request_models(&service).await?, chosen_model)?;
-    let existing = chat.opencode_session(&turn);
-    let question = chat::plain_question(turn.first, context.as_ref(), &query);
-    let text = if turn.first {
-        format!("{}\n\nDo not run tools or modify files.\n\n{}", chat::system_prompt(false), question)
-    } else {
-        question
+    let (request, cancelled) = chat.begin_opencode_request();
+    let result = tokio::select! {
+        answer = async {
+            start_service().await?;
+            let service = service()?;
+            let model = model_ref(&request_models(&service).await?, chosen_model)?;
+            let existing = chat.opencode_session(&turn);
+            let question = chat::plain_question(turn.first, context.as_ref(), &query);
+            let text = if turn.first {
+                format!("{}\n\nDo not run tools or modify files.\n\n{}", chat::system_prompt(false), question)
+            } else {
+                question
+            };
+            run(&model, existing.as_deref(), text).await
+        } => answer,
+        _ = cancelled => Err(t("Workflow stopped.")),
     };
-    let (session, answer) = run(&model, existing.as_deref(), text).await?;
+    chat.end_opencode_request(request);
+    let (session, answer) = result?;
     chat.remember_opencode_session(&turn, session);
     let user = json!({ "role": "user", "content": query.clone() });
     let assistant = json!({ "role": "assistant", "content": answer.clone() });

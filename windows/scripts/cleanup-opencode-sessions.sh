@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# Retain Coucou chat sessions for 30 days, leaving all other OpenCode work alone.
+set -euo pipefail
+
+cutoff=$(( $(date +%s) - 30*24*60*60 ))
+command -v opencode >/dev/null 2>&1 || exit 0
+cd -- "$HOME"  # Coucou runs OpenCode chat in the user's home project.
+sessions="$(opencode session list --format json --max-count 10000)"
+candidates="$(printf '%s' "$sessions" | node -e '
+let input="";
+process.stdin.on("data", chunk => input += chunk);
+process.stdin.on("end", () => {
+  for (const session of JSON.parse(input)) {
+    if (session.title !== "Coucou chat") continue;
+    const raw = session.updated ?? session.created;
+    const seconds = typeof raw === "number"
+      ? (raw > 1e11 ? raw / 1000 : raw)
+      : Date.parse(raw || "") / 1000;
+    if (/^ses_[A-Za-z0-9_-]+$/.test(session.id ?? "") && Number.isFinite(seconds)) {
+      console.log(`${session.id}\t${Math.floor(seconds)}`);
+    }
+  }
+});
+')"
+while IFS=$'\t' read -r id updated; do
+  [[ -n "$id" && "$updated" =~ ^[0-9]+$ ]] || continue
+  (( updated < cutoff )) || continue
+  if [[ "${1:-}" == "--dry-run" ]]; then
+    printf 'Would delete Coucou chat session %s\n' "$id"
+  else
+    opencode session delete "$id" >/dev/null
+  fi
+done <<< "$candidates"

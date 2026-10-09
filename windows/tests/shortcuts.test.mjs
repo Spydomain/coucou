@@ -489,11 +489,12 @@ test("island keys: pills by number, new chat, settings, pin", () => {
   State.chatHistory = [{ id: 1, role: "user", content: "hi" }];
   State.stateOverride = "thinking";
   runIslandKey(host, { kind: "newChat" });
-  assert.equal(State.chatHistory.length, 1, "not while an answer is on its way");
+  assert.equal(State.chatHistory.length, 0, "new chat stops an answer in progress");
+  assert.equal(State.stateOverride, null);
   State.stateOverride = null;
   runIslandKey(host, { kind: "newChat" });
   assert.deepEqual(State.chatHistory, []);
-  assert.equal(sent("chat_reset").length, 1);
+  assert.equal(sent("chat_reset").length, 2);
 
   runIslandKey(host, { kind: "settings" });
   assert.equal(sent("open_settings_window").length, 1);
@@ -501,7 +502,7 @@ test("island keys: pills by number, new chat, settings, pin", () => {
   runIslandKey(host, { kind: "pin" });
   State.pendingApproval = { requestId: "r1", sessionId: "s", pillId: "integration_claude", tool: "Bash", command: "ls" };
   runIslandKey(host, { kind: "pin" });
-  assert.deepEqual(did, ["setView:overview", "setView:overview", "setView:prompt", "pin:true"]);
+  assert.deepEqual(did, ["setView:overview", "setView:overview", "setView:prompt", "setView:prompt", "pin:true"]);
 });
 
 test("island keys: the highlight walks the list on screen, Ctrl+O opens it, Ctrl+E the diff", () => {

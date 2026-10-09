@@ -66,7 +66,7 @@ export const EXPANDED_CORNER = 22;
 
 /** Invisible hover strip that wakes the island when hidden. */
 export const WAKE_STRIP_W = 240;
-export const WAKE_STRIP_H = 6;
+export const WAKE_STRIP_H = 10;
 
 export const VIEW_LAYOUTS: Record<IslandViewName, ViewLayout> = {
   overview: { height: 160, botX: 68, botY: null, botDiameter: 58, agentMode: "pills" },

@@ -416,6 +416,9 @@ function n8nDetail(task: AgentTask, onBack: () => void): HTMLElement {
 
 // ── System ────────────────────────────────────────────────────────────────────
 
+let networkOpen = false;
+let networkSnapshot: { addresses: string[]; listening: string[]; established: number } | null = null;
+
 /** A labelled usage bar (CPU, memory) for the System card. */
 function usageBar(color: string, label: string, value: string, percent: number): HTMLElement {
   const clamped = Math.max(0, Math.min(100, Math.round(percent)));
@@ -467,16 +470,48 @@ function systemCard(): HTMLElement {
     );
   });
 
+  const network = h("div", { class: "int-rows tight int-network" });
+  const syncNetwork = () => {
+    rows.style.display = networkOpen ? "none" : "";
+    network.style.display = networkOpen ? "" : "none";
+    clear(network);
+    if (!networkOpen) return;
+    if (!networkSnapshot) {
+      network.append(h("div", { class: "int-status", text: "Reading local network…" }));
+      return;
+    }
+    const addresses = networkSnapshot.addresses.join(", ") || "No active IPv4 address";
+    const ports = networkSnapshot.listening.join(", ") || "No listening ports";
+    network.append(
+      listRow("#38BDF8", true, h("span", { class: "int-name", text: "Local IP" }), h("span", { class: "int-ago", text: addresses, title: addresses })),
+      listRow("#F5A524", false, h("span", { class: "int-name", text: "Listening" }), h("span", { class: "int-ago", text: ports, title: ports })),
+      listRow("#22C55E", false, h("span", { class: "int-name", text: "Connections" }), h("span", { class: "int-ago", text: String(networkSnapshot.established) })),
+    );
+  };
+  const networkButton = h("button", { class: "link-btn", style: "color:#38bdf8d9", text: networkOpen ? "Processes" : "Network snapshot" });
+  networkButton.addEventListener("click", () => {
+    networkOpen = !networkOpen;
+    networkButton.textContent = networkOpen ? "Processes" : "Network snapshot";
+    syncNetwork();
+    if (networkOpen) void Bridge.securitySnapshot().then((snapshot) => {
+      if (!snapshot) return;
+      networkSnapshot = snapshot;
+      if (network.isConnected) syncNetwork();
+    });
+  });
+  syncNetwork();
+
   return h(
     "div",
     { class: "int-card" },
     header("#38BDF8", "System monitor", "Monitor"),
     gauges,
     rows,
+    network,
     h("div", { class: "int-status" }, h("span", {
       text: `${procCount} processes · load ${load1.toFixed(2)}`,
     })),
-    h("div", { class: "int-actions" }, h("button", {
+    h("div", { class: "int-actions" }, networkButton, h("button", {
       class: "link-btn",
       style: "color:#38bdf8d9",
       text: t("Refresh"),

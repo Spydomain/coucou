@@ -23,10 +23,12 @@ import { closePlanCard, openPlanColor, planCardOpen } from "../views/usage";
 import { buildHeader, buildViews, type ViewActions, type ViewHost } from "../views/views";
 import { h } from "../views/dom";
 import { IslandStateMachine } from "./fsm";
+import { companionMoodState } from "./wellbeing";
 import { refreshHookPills } from "./integrations";
 import { DesktopLink } from "./desktop";
 import type { ViewCommand } from "./shortcuts";
 import { DRAG_THRESHOLD } from "../mochi/desktop-logic";
+import { danceBpm } from "../core/music-mood";
 
 const BOT_OVERHANG = 40;
 const CLAUDE_DESKTOP_ID = "agent_claude-desktop";
@@ -58,6 +60,11 @@ export class Island {
   private greetingCanvas!: HTMLCanvasElement;
   private miniGrid!: HTMLElement;
   private countdown!: HTMLElement;
+  private notice!: HTMLElement;
+  private chargePop!: HTMLElement;
+  private chargeCanvas!: HTMLCanvasElement;
+  private chargeLabel!: HTMLElement;
+  private chargeIcon!: HTMLElement;
   private wakeStrip!: HTMLElement;
 
   private header!: ViewHost;
@@ -72,10 +79,17 @@ export class Island {
   private botSize = new Spring(10);
 
   private engine = new BotEngine();
+  private chargeEngine = new BotEngine();
   private greeting = new Greeting();
   private greetingShown = false;
   private seasons = new SeasonCache();
   private lastMusicSignature = "";
+  private nextCuteActionAt = performance.now() + 18000;
+  private charging: boolean | null = null;
+  private chargeToken = 0;
+  private powerActive = false;
+  private nightMood = false;
+  private noticeTimer: number | null = null;
 
   private running = false;
   private lastFrame = 0;
@@ -130,6 +144,7 @@ export class Island {
     this.build();
     this.wireFsm();
     this.wireInput();
+    this.installBatteryMood();
     this.engine.onDizzy = () => this.handleDizzy();
     this.greeting.onComplete = () => {
       this.fsm.greetComplete();
@@ -137,7 +152,9 @@ export class Island {
     };
     State.subscribe(() => {
       this.dirty = true;
-      this.ensureRunning();
+      // A hidden, fully retracted island waits for an actual wake event.
+      // Integration reports can arrive every two seconds without drawing.
+      if (State.mode !== "hidden" || !this.collapsed) this.ensureRunning();
     });
   }
 
@@ -266,6 +283,13 @@ export class Island {
     this.greetingCanvas = h("canvas", { id: "greeting-canvas" });
     this.miniGrid = h("div", { id: "mini-grid" });
     this.countdown = h("div", { id: "countdown" });
+    this.notice = h("div", { id: "companion-toast", role: "status", "aria-live": "polite" });
+    this.chargeCanvas = h("canvas", { id: "charge-bot-canvas", "aria-hidden": "true" }) as HTMLCanvasElement;
+    this.chargeLabel = h("span", { id: "charge-label" });
+    this.chargeIcon = h("span", { id: "charge-bolt", "aria-hidden": "true", text: "⚡" });
+    this.chargePop = h("div", { id: "charge-pop", role: "status", "aria-live": "polite" },
+      this.chargeIcon,
+      this.chargeCanvas, this.chargeLabel);
 
     this.header = buildHeader(actions);
     this.views = buildViews(actions, () => this.animateGeometry(false));
@@ -291,6 +315,7 @@ export class Island {
       this.greetingCanvas,
       this.uploadCanvas.el,
       this.contentEl,
+      this.chargePop,
     );
     this.islandEl = h(
       "div",
@@ -300,6 +325,7 @@ export class Island {
       this.botCanvas,
       this.miniGrid,
       this.countdown,
+      this.notice,
     );
 
     const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -447,6 +473,19 @@ export class Island {
     this.silentReveal = false;
   }
 
+  /** A short, unobtrusive message below the island. */
+  showNotice(message: string, durationMs = 5500) {
+    if (State.paused || State.pendingApproval) return;
+    this.notice.textContent = message;
+    this.notice.classList.add("show");
+    if (State.mode === "hidden") this.revealSilently();
+    if (this.noticeTimer != null) window.clearTimeout(this.noticeTimer);
+    this.noticeTimer = window.setTimeout(() => {
+      this.notice.classList.remove("show");
+      this.noticeTimer = null;
+    }, durationMs);
+  }
+
   /** Right-click on Mochi: wardrobe open ↔ back to the usual view. */
   toggleWardrobe() {
     if (State.paused || State.mode === "hidden") return;
@@ -579,7 +618,9 @@ export class Island {
     const name = path.split(/[\\/]/).pop() || "file";
     State.droppedFile = { name, path };
     State.promptContext = { kind: "file", name, path };
+    State.chatGeneration++;
     State.chatHistory = [];
+    State.stateOverride = null;
     void Bridge.chatReset();
 
     UploadSeq.performDrop(State.uploadDuration);
@@ -1047,6 +1088,7 @@ export class Island {
     const viewAnimating = this.views.get(State.view)?.tick?.(nowMs) === true;
     if (UploadSeq.isActive) this.stepSequence();
     this.updateCountdown(nowMs);
+    this.randomCuteAction(nowMs);
 
     // Nothing is drawn while the island is hidden, so nothing may keep the loop
     // alive either. This used to read `... || this.engine.busy || State.mode !==
@@ -1080,10 +1122,10 @@ export class Island {
     // The drop canvas draws its own Mochi; two of them would overlap. Out on the
     // desktop, he isn't here at all.
     const away = State.mochiOnDesktop;
-    const visible = p.opacity > 0 && !greetingActive && !this.uploadActive && !away;
+    const visible = p.opacity > 0 && !greetingActive && !this.uploadActive && !away && !this.powerActive;
     this.botCanvas.style.opacity = visible ? "1" : "0";
 
-    if (State.mode === "expanded" && State.view !== "uploading" && !greetingActive && !this.uploadActive && !away) {
+    if (State.mode === "expanded" && State.view !== "uploading" && !greetingActive && !this.uploadActive && !away && !this.powerActive) {
       const d = p.diameter;
       const color = botGlowColor(State.effectiveState);
       this.botGlow.style.display = "block";
@@ -1175,22 +1217,143 @@ export class Island {
     const title = String(player?.title ?? spotifyTrack?.title ?? "");
     const artist = String(player?.artist ?? spotifyTrack?.artist ?? "");
     const playing = State.musicPlaying && Boolean(title || artist);
-    const signature = playing ? `${title}\u0000${artist}` : "";
+    const genre = String(player?.genre ?? spotifyTrack?.genre ?? "");
+    const bpm = player?.bpm ?? spotifyTrack?.bpm;
+    const signature = playing ? `${title}\u0000${artist}\u0000${genre}\u0000${bpm ?? ""}` : "";
     if (!signature) {
       this.lastMusicSignature = "";
       return;
     }
     if (signature === this.lastMusicSignature) return;
     this.lastMusicSignature = signature;
-    const words = `${title} ${artist}`.toLowerCase();
+    this.engine.danceBpm = danceBpm(bpm, genre);
+    const words = `${title} ${artist} ${genre}`.toLowerCase();
     const mood: BotEmoteName = /love|heart|romantic|afreen|kiss|sweet/.test(words)
       ? "love"
-      : /sad|cry|alone|雨|rain/.test(words)
+      : /sad|cry|alone|rain|ambient|ballad/.test(words)
         ? "yawn"
         : /rock|metal|fire|energy|dance|party/.test(words)
           ? "surprised"
           : "happy";
     this.engine.triggerEmote(mood, 1.8);
+  }
+
+  private installBatteryMood() {
+    const sync = async () => {
+      const power = await Bridge.powerStatus();
+      if (!power) return;
+      const now = power.pluggedIn;
+      this.root.classList.toggle("charging", now);
+      if (this.charging !== null && this.charging !== now) this.startPowerAnimation(now, power.level);
+      this.charging = now;
+    };
+    void sync();
+    // Sysfs is cheap to read; keep the plug-in reaction close to the event.
+    window.setInterval(() => void sync(), 1_500);
+  }
+
+  /** A brief Mochi performance inside the opened bar, in either power direction. */
+  private startPowerAnimation(pluggedIn: boolean, level: number) {
+    if (State.paused || State.pendingApproval) return;
+    // forceHome cancels a pending collapse, so even a short auto-close setting
+    // cannot fold the bar halfway through the power reaction.
+    this.fsm.forceHome();
+    const token = ++this.chargeToken;
+    this.powerActive = true;
+    const started = performance.now();
+    let lastFrame = started;
+    let stage = 0;
+    const bodySize = 68;
+    const width = Math.round(bodySize / 0.6);
+    const canvasW = width + BOT_SIDE * 2;
+    const canvasH = width + BOT_OVERHANG;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    this.chargeCanvas.width = Math.round(canvasW * dpr);
+    this.chargeCanvas.height = Math.round(canvasH * dpr);
+    this.chargeCanvas.style.width = `${canvasW}px`;
+    this.chargeCanvas.style.height = `${canvasH}px`;
+    this.chargeLabel.textContent = `${pluggedIn ? "Charging" : "On battery"} · ${level}%`;
+    this.chargePop.classList.toggle("unplugged", !pluggedIn);
+    this.chargeIcon.textContent = pluggedIn ? "⚡" : "🔋";
+    this.chargeEngine = new BotEngine();
+    this.chargeEngine.particleOverhang = BOT_OVERHANG;
+    this.chargeEngine.setOutfit(this.seasons.get(parseOutfit(State.settings.mochiOutfit)), true);
+    this.chargeEngine.setState(!pluggedIn && this.nightMood ? "sleeping" : "idle");
+    this.chargeEngine.danceBpm = 136;
+    this.chargeEngine.setDancing(pluggedIn);
+    this.chargeEngine.triggerEmote("surprised", 1.1);
+    if (pluggedIn) this.chargeEngine.emit("spark", 7);
+    this.root.classList.toggle("charger-pop", pluggedIn);
+    this.root.classList.toggle("charger-unplug", !pluggedIn);
+    this.chargePop.classList.add("show");
+    this.dirty = true;
+    this.ensureRunning();
+
+    const frame = (time: number) => {
+      if (token !== this.chargeToken) return;
+      const elapsed = time - started;
+      if (elapsed >= 4700) {
+        this.stopChargingPop();
+        return;
+      }
+      if (elapsed >= 1150 && stage === 0) {
+        stage = 1;
+        this.chargeEngine.triggerEmote(pluggedIn ? "proud" : this.nightMood ? "yawn" : "wink", 1.9);
+        if (pluggedIn) this.chargeEngine.emit("spark", 8);
+      } else if (elapsed >= 2800 && stage === 1) {
+        stage = 2;
+        this.chargeEngine.triggerEmote(pluggedIn ? "love" : this.nightMood ? "yawn" : "happy", 1.7);
+      }
+      const ctx = this.chargeCanvas.getContext("2d");
+      if (ctx) {
+        this.chargeEngine.update(Math.min(0.05, (time - lastFrame) / 1000));
+        ctx.setTransform(dpr, 0, 0, dpr, BOT_SIDE * dpr, 0);
+        ctx.clearRect(-BOT_SIDE, 0, canvasW, canvasH);
+        ctx.save();
+        this.chargeEngine.applyDance(ctx, width, canvasH);
+        this.chargeEngine.draw(ctx, width, canvasH);
+        ctx.restore();
+      }
+      lastFrame = time;
+      requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
+  }
+
+  private stopChargingPop() {
+    this.chargeToken++;
+    this.powerActive = false;
+    this.root.classList.remove("charger-pop");
+    this.root.classList.remove("charger-unplug");
+    this.chargePop.classList.remove("show");
+    this.dirty = true;
+    if (!this.wasInIsland) this.fsm.mouseLeft();
+    this.ensureRunning();
+  }
+
+  private randomCuteAction(nowMs: number) {
+    if (nowMs < this.nextCuteActionAt || State.mode === "hidden" || State.view === "greeting") return;
+    this.nextCuteActionAt = nowMs + 22000 + Math.random() * 38000;
+    if (this.powerActive || State.effectiveState !== "idle") return;
+    const choices: BotEmoteName[] = this.nightMood && !State.musicPlaying
+      ? ["yawn", "wink", "yawn"]
+      : ["happy", "wink", "love", "proud"];
+    this.engine.triggerEmote(choices[Math.floor(Math.random() * choices.length)], 1.4);
+  }
+
+  /** Sleep while idle at night; music and active tasks still take precedence. */
+  setNightMood(on: boolean) {
+    if (this.nightMood === on) return;
+    this.nightMood = on;
+    this.desktop.setNightMood(on);
+    this.engine.setState(this.botMoodState());
+    if (on && State.effectiveState === "idle" && !State.musicPlaying) this.engine.triggerEmote("yawn", 2.2);
+    this.dirty = true;
+    if (State.mode !== "hidden") this.ensureRunning();
+  }
+
+  private botMoodState() {
+    return companionMoodState(State.effectiveState, this.nightMood, State.musicPlaying);
   }
 
   /** BotCanvasView.lookX / lookY — tanh of the distance to the bot. */
@@ -1276,7 +1439,7 @@ export class Island {
     }
 
     syncMiniBotStates(State.tasks);
-    this.engine.setState(State.effectiveState);
+    this.engine.setState(this.botMoodState());
   }
 
   /** Applies settings coming from Rust at boot. */

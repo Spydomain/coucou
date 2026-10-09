@@ -7,6 +7,8 @@
 // boundary: the island sends the question and gets the answer's text back.
 
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
+use tokio::sync::oneshot;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -48,6 +50,8 @@ pub struct ModelInfo {
 #[derive(Default)]
 pub struct Chat {
     inner: Mutex<Conversation>,
+    active_opencode: Mutex<Option<(u64, oneshot::Sender<()>)>>,
+    next_opencode_request: AtomicU64,
 }
 
 #[derive(Default)]
@@ -76,6 +80,7 @@ pub struct Turn {
 
 impl Chat {
     pub fn reset(&self) {
+        self.cancel_opencode();
         let mut c = self.inner.lock().unwrap();
         let epoch = c.epoch + 1;
         *c = Conversation { epoch, ..Default::default() };
@@ -86,6 +91,7 @@ impl Chat {
     pub fn begin(&self, provider: &str) -> Turn {
         let mut c = self.inner.lock().unwrap();
         if c.owner.as_deref() != Some(provider) {
+            self.cancel_opencode();
             c.native = c.plain.clone();
             c.owner = Some(provider.to_string());
             c.opencode_session = None;
@@ -95,6 +101,27 @@ impl Chat {
             provider: provider.to_string(),
             first: c.plain.is_empty(),
             history: c.native.clone(),
+        }
+    }
+
+    fn cancel_opencode(&self) {
+        if let Some((_, sender)) = self.active_opencode.lock().unwrap().take() {
+            let _ = sender.send(());
+        }
+    }
+
+    pub fn begin_opencode_request(&self) -> (u64, oneshot::Receiver<()>) {
+        self.cancel_opencode();
+        let id = self.next_opencode_request.fetch_add(1, Ordering::Relaxed);
+        let (sender, receiver) = oneshot::channel();
+        *self.active_opencode.lock().unwrap() = Some((id, sender));
+        (id, receiver)
+    }
+
+    pub fn end_opencode_request(&self, id: u64) {
+        let mut active = self.active_opencode.lock().unwrap();
+        if active.as_ref().is_some_and(|(current, _)| *current == id) {
+            active.take();
         }
     }
 
@@ -332,6 +359,21 @@ mod tests {
         let _other = chat.begin("google");
         chat.commit(&t, json!({"role":"user","content":"q"}), json!({"role":"assistant","content":"a"}), "q", "a");
         assert!(chat.begin("google").first);
+    }
+
+    #[test]
+    fn reset_or_provider_switch_cancels_the_active_opencode_turn() {
+        let chat = Chat::default();
+        chat.begin("opencode");
+        let (_, mut cancelled) = chat.begin_opencode_request();
+        assert!(cancelled.try_recv().is_err());
+        chat.reset();
+        assert!(cancelled.try_recv().is_ok());
+
+        chat.begin("opencode");
+        let (_, mut cancelled) = chat.begin_opencode_request();
+        chat.begin("anthropic");
+        assert!(cancelled.try_recv().is_ok());
     }
 
     #[test]

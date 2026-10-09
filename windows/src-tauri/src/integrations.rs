@@ -96,6 +96,7 @@ where
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(Duration::from_secs(delay_secs)).await;
         let mut ticker = tokio::time::interval(Duration::from_secs(every_secs));
+        let mut next_hidden_system_sample = std::time::Instant::now();
         loop {
             ticker.tick().await;
             // The ticker keeps its cadence; we just decline to do the work. An
@@ -104,6 +105,19 @@ where
             // the user configured, and a disabled one is not configured.
             if PAUSED.load(Ordering::Relaxed) || !enabled(&app, id) {
                 continue;
+            }
+            // A closed System card does not need a full /proc process scan
+            // every two seconds. Keep a slower background reading ready.
+            if id == "integration_system" {
+                let hidden = app.try_state::<crate::Shared>()
+                    .is_some_and(|shared| shared.gate.collapsed.load(Ordering::Relaxed));
+                if hidden {
+                    let now = std::time::Instant::now();
+                    if now < next_hidden_system_sample { continue; }
+                    next_hidden_system_sample = now + Duration::from_secs(12);
+                } else {
+                    next_hidden_system_sample = std::time::Instant::now();
+                }
             }
             poll(app.clone()).await;
         }

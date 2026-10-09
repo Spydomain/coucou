@@ -8,6 +8,7 @@ import { Island } from "./island/island";
 import { registerHookHandlers } from "./island/hooks";
 import { registerIntegrationHandlers, refreshConfigured } from "./island/integrations";
 import { registerShortcutHandlers } from "./island/shortcuts";
+import { Wellbeing } from "./island/wellbeing";
 import { applySpotify, registerSpotifyHandlers } from "./island/spotify";
 import { SPOTIFY_ID } from "./core/spotify";
 import { Recap } from "./recap/recap";
@@ -25,6 +26,7 @@ async function main() {
   void Sound.preload();
 
   const island = new Island(root);
+  const wellbeing = new Wellbeing(island);
 
   const boot = await Bridge.boot();
   if (boot) {
@@ -108,11 +110,15 @@ async function main() {
 
   // Monday recap: app start (greeting over), an agent starting work, waking up.
   const checkRecap = () => void Recap.check(island);
-  island.onGreetingDone = checkRecap;
+  island.onGreetingDone = () => {
+    checkRecap();
+    window.setTimeout(() => wellbeing.check(), 900);
+  };
   island.onWake = checkRecap;
   await onEvent<null>("recap-check", checkRecap);
 
   island.launch();
+  wellbeing.start();
 
   // In a plain browser there is no wake strip behind the cursor: make the whole
   // page wake the island so the visuals can be checked with `npm run dev`.

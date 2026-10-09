@@ -91,6 +91,8 @@ pub struct Track {
     pub title: String,
     pub artist: String,
     pub album: String,
+    pub genre: String,
+    pub bpm: Option<f64>,
     /// Seconds.
     pub duration: f64,
     pub art_url: Option<String>,
@@ -268,6 +270,9 @@ pub fn parse_metadata(map: &[(String, Value)]) -> Option<Track> {
         title: short_title(&title),
         artist: short_artist(&find(map, "xesam:artist").map(Value::text).unwrap_or_default()),
         album: find(map, "xesam:album").map(Value::text).unwrap_or_default(),
+        genre: find(map, "xesam:genre").map(Value::text).unwrap_or_default(),
+        bpm: find(map, "xesam:audioBPM").and_then(Value::int)
+            .map(|n| n as f64).filter(|n| (40.0..=240.0).contains(n)),
         duration,
         art_url,
         object_path,

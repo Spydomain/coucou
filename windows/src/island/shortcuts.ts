@@ -163,9 +163,10 @@ export function runIslandKey(host: ShortcutHost, action: IslandKeyAction) {
       host.viewCommand("toggleDiff");
       break;
     case "newChat":
-      // Not while an answer is on its way: it would land in the new chat.
-      if (State.stateOverride === "thinking") return;
+      // Reset cancels the OpenCode request, so a new chat can start at once.
+      State.chatGeneration++;
       State.chatHistory = [];
+      State.stateOverride = null;
       State.droppedFile = null;
       State.promptContext = null;
       void Bridge.chatReset();

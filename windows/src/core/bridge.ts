@@ -34,6 +34,8 @@ export interface BootInfo {
 
 export const Bridge = {
   boot: () => call<BootInfo>("boot"),
+  powerStatus: () => call<{ pluggedIn: boolean; level: number }>("power_status"),
+  securitySnapshot: () => call<{ addresses: string[]; listening: string[]; established: number }>("security_snapshot"),
   /** The system's languages as the webview sees them, for Rust's own texts (i18n.rs). */
   setSystemLanguages: (languages: string[]) => call<void>("set_system_languages", { languages }),
 

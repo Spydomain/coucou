@@ -18,6 +18,8 @@ export interface SpotifyTrack {
   title: string;
   artist: string;
   album: string;
+  genre?: string;
+  bpm?: number | null;
   /** Seconds. */
   duration: number;
   artUrl: string | null;
