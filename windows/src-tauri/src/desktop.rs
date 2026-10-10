@@ -273,12 +273,15 @@ fn body_disc() -> MouseShape {
 
 // ── Setup ─────────────────────────────────────────────────────────────────────
 
-/// Same reasoning as the settings window: created hidden at launch, before the
-/// island's webview, then only shown and hidden. Nothing is created where the
-/// feature is off.
+/// Create the desktop webview only when Mochi actually lives on the desktop.
+/// A hidden WebKit process costs substantial memory on Linux.
 pub fn setup(app: &AppHandle) {
     let mut mode = platform::desktop_mode();
-    if mode != DesktopMode::Off {
+    let on_desktop = app
+        .try_state::<crate::Shared>()
+        .map(|s| s.settings.lock().unwrap().desktop_mochi.on_desktop)
+        .unwrap_or(false);
+    if mode != DesktopMode::Off && on_desktop {
         match create_window(app, mode) {
             Some(win) if platform::prepare_desktop_window(&win, mode) => {}
             Some(win) => {
@@ -295,6 +298,16 @@ pub fn setup(app: &AppHandle) {
     refresh(app, &desktop);
     if mode == DesktopMode::Poll {
         spawn_poll(app.clone(), desktop);
+    }
+}
+
+fn ensure_window(app: &AppHandle, mode: DesktopMode) -> bool {
+    if mode == DesktopMode::Off { return false; }
+    if window(app).is_some() { return true; }
+    match create_window(app, mode) {
+        Some(win) if platform::prepare_desktop_window(&win, mode) => true,
+        Some(win) => { let _ = win.destroy(); false }
+        None => false,
     }
 }
 
@@ -693,7 +706,7 @@ pub fn desktop_mochi_info(app: AppHandle, desktop: State<Arc<Desktop>>) -> Deskt
 #[tauri::command]
 pub async fn desktop_mochi_pick_up(app: AppHandle, x: f64, y: f64) -> bool {
     let d = app.state::<Arc<Desktop>>().inner().clone();
-    if d.mode == DesktopMode::Off || window(&app).is_none() || d.inner.lock().unwrap().shown {
+    if !ensure_window(&app, d.mode) || d.inner.lock().unwrap().shown {
         return false;
     }
     refresh_layer_display(&app, &d);
@@ -812,7 +825,7 @@ pub async fn desktop_mochi_drag_end(app: AppHandle, x: f64, y: f64) {
 #[tauri::command]
 pub async fn desktop_mochi_fly_out(app: AppHandle, anywhere: Option<bool>) -> bool {
     let d = app.state::<Arc<Desktop>>().inner().clone();
-    if d.mode == DesktopMode::Off || window(&app).is_none() {
+    if !ensure_window(&app, d.mode) {
         return false;
     }
     refresh_layer_display(&app, &d);

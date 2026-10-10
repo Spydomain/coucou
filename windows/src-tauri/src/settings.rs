@@ -331,7 +331,14 @@ fn set_aside_as(
             0 => path.with_file_name(&base),
             n => path.with_file_name(format!("{base}-{n}")),
         };
-        match std::fs::OpenOptions::new().write(true).create_new(true).open(&copy) {
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&copy) {
             Ok(mut file) => {
                 let written = write(&mut file, bytes);
                 drop(file);
@@ -370,8 +377,24 @@ fn save_to(path: &Path, settings: &Settings) -> std::io::Result<()> {
     // Write beside the target and rename over it: a crash, a full disk or a
     // power cut leaves the previous settings.json intact rather than half a file.
     let temp = path.with_extension(format!("json.coucou-{}", std::process::id()));
-    let written = std::fs::File::create(&temp)
-        .and_then(|mut file| write_whole(&mut file, &json))
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let written = options.open(&temp)
+        .and_then(|mut file| {
+            // A leftover temporary file from an interrupted save may have an
+            // older, weaker mode. Tighten it before writing anything private.
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+            }
+            write_whole(&mut file, &json)
+        })
         .and_then(|()| std::fs::rename(&temp, path));
     if written.is_err() {
         let _ = std::fs::remove_file(&temp);
@@ -831,6 +854,18 @@ mod tests {
         std::fs::write(&file, CUSTOM).unwrap();
         save_to(&file, &Settings::default()).unwrap();
         assert_eq!(shown(&load_from(&file)), defaults());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn settings_and_recovery_copies_are_private() {
+        use std::os::unix::fs::PermissionsExt;
+        let (dir, file) = scratch("private");
+        save_to(&file, &Settings::default()).unwrap();
+        assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+        let copy = set_aside_as(&file, "corrupt", "20260102-030405", b"secret", write_whole).unwrap();
+        assert_eq!(std::fs::metadata(&copy).unwrap().permissions().mode() & 0o777, 0o600);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

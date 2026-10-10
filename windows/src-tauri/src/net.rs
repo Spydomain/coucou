@@ -114,7 +114,8 @@ pub fn anthropic_endpoint(raw: &str) -> Result<Url, String> {
 pub fn client(url: &Url, timeout: Duration) -> Result<reqwest::Client, String> {
     let mut builder = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(10).min(timeout))
-        .timeout(timeout);
+        .timeout(timeout)
+        .redirect(reqwest::redirect::Policy::none());
     if is_loopback_url(url) {
         builder = builder.no_proxy();
     }

@@ -50,8 +50,11 @@ fn emit(app: &AppHandle, update: IntegrationUpdate) {
 fn client() -> reqwest::Client {
     reqwest::Client::builder()
         .timeout(TIMEOUT)
+        // API keys (including the custom n8n header) must never follow a
+        // server-controlled redirect to a different origin.
+        .redirect(reqwest::redirect::Policy::none())
         .build()
-        .unwrap_or_default()
+        .expect("valid integration HTTP client configuration")
 }
 
 /// Set from the tray's Pause item. While it is on, nothing reaches the network:
@@ -126,6 +129,9 @@ where
 
 /// One-shot refresh from the Refresh buttons in the island.
 pub async fn poll_once(app: AppHandle, id: &str) {
+    if PAUSED.load(Ordering::Relaxed) || !enabled(&app, id) {
+        return;
+    }
     match id {
         "integration_stripe" => poll_stripe(app).await,
         "integration_github" => {
@@ -1035,7 +1041,10 @@ async fn poll_n8n(app: AppHandle) {
     let (Some(key), Some(raw_base)) = (secrets::get("n8n-api-key"), secrets::get("n8n-url")) else {
         return;
     };
-    let base = raw_base.trim_end_matches('/').to_string();
+    let Some(base) = n8n_base(&raw_base) else {
+        log::line("n8n URL must use HTTPS (HTTP is allowed only for loopback)");
+        return;
+    };
     let http = client();
 
     // Same two shapes as the Swift poller: the public API first, then /rest.
@@ -1119,6 +1128,23 @@ async fn poll_n8n(app: AppHandle) {
     });
 }
 
+fn n8n_base(raw: &str) -> Option<String> {
+    let mut url = reqwest::Url::parse(raw.trim()).ok()?;
+    if !matches!(url.scheme(), "https" | "http")
+        || (url.scheme() == "http" && !crate::net::is_loopback_url(&url))
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+    {
+        return None;
+    }
+    let path = url.path().trim_end_matches('/').to_string();
+    url.set_path(&path);
+    Some(url.as_str().trim_end_matches('/').to_string())
+}
+
 fn n8n_detail(json: &Value, success: bool) -> Option<String> {
     let result = json.get("data")?.get("resultData")?;
     if !success {
@@ -1191,6 +1217,21 @@ fn fmt_value(v: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn n8n_rejects_insecure_or_credentialed_remote_urls() {
+        assert_eq!(n8n_base("https://n8n.example.org/workflows/"), Some("https://n8n.example.org/workflows".into()));
+        assert_eq!(n8n_base("http://localhost:5678/"), Some("http://localhost:5678".into()));
+        for bad in [
+            "http://n8n.example.org",
+            "https://user:secret@n8n.example.org",
+            "https://n8n.example.org/?token=secret",
+            "https://n8n.example.org/#fragment",
+            "file:///tmp/workflows",
+        ] {
+            assert_eq!(n8n_base(bad), None, "accepted {bad}");
+        }
+    }
 
     #[test]
     fn github_card_data_sends_only_what_is_known() {

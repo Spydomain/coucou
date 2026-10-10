@@ -3,9 +3,15 @@
 set -euo pipefail
 
 cutoff=$(( $(date +%s) - 30*24*60*60 ))
-command -v opencode >/dev/null 2>&1 || exit 0
+opencode_bin="$(command -v opencode || true)"
+if [[ -z "$opencode_bin" ]]; then
+  for candidate in "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode"; do
+    if [[ -x "$candidate" ]]; then opencode_bin="$candidate"; break; fi
+  done
+fi
+[[ -n "$opencode_bin" ]] || exit 0
 cd -- "$HOME"  # Coucou runs OpenCode chat in the user's home project.
-sessions="$(opencode session list --format json --max-count 10000)"
+sessions="$("$opencode_bin" session list --format json --max-count 10000)"
 candidates="$(printf '%s' "$sessions" | node -e '
 let input="";
 process.stdin.on("data", chunk => input += chunk);
@@ -28,6 +34,6 @@ while IFS=$'\t' read -r id updated; do
   if [[ "${1:-}" == "--dry-run" ]]; then
     printf 'Would delete Coucou chat session %s\n' "$id"
   else
-    opencode session delete "$id" >/dev/null
+    "$opencode_bin" session delete "$id" >/dev/null
   fi
 done <<< "$candidates"

@@ -37,6 +37,14 @@ const BOT_SIDE = 24;
 /** Same margin as the Rust hit test (src-tauri/src/island.rs). */
 const HIT_MARGIN = 14;
 
+/** Warn only at meaningful battery milestones; a bouncing reading cannot spam. */
+export function batteryWarningThreshold(level: number): 20 | 10 | 5 | null {
+  if (level <= 5) return 5;
+  if (level <= 10) return 10;
+  if (level <= 20) return 20;
+  return null;
+}
+
 /** The three views the drop sequence owns; leaving them stops the engine. */
 const UPLOAD_VIEWS: ReadonlySet<IslandViewName> = new Set(["upload", "uploading", "choose"]);
 
@@ -89,6 +97,8 @@ export class Island {
   private chargeToken = 0;
   private powerActive = false;
   private nightMood = false;
+  private lastLowBatteryThreshold: number | null = null;
+  private noticeActive = false;
   private noticeTimer: number | null = null;
 
   private running = false;
@@ -315,6 +325,7 @@ export class Island {
       this.greetingCanvas,
       this.uploadCanvas.el,
       this.contentEl,
+      this.notice,
       this.chargePop,
     );
     this.islandEl = h(
@@ -325,7 +336,6 @@ export class Island {
       this.botCanvas,
       this.miniGrid,
       this.countdown,
-      this.notice,
     );
 
     const dpr = Math.min(2, window.devicePixelRatio || 1);
@@ -473,16 +483,25 @@ export class Island {
     this.silentReveal = false;
   }
 
-  /** A short, unobtrusive message below the island. */
+  /** A short message inside the opened capsule, with Mochi still visible. */
   showNotice(message: string, durationMs = 5500) {
     if (State.paused || State.pendingApproval) return;
+    this.fsm.forceHome();
+    this.noticeActive = true;
+    this.root.classList.add("notice-active");
     this.notice.textContent = message;
     this.notice.classList.add("show");
-    if (State.mode === "hidden") this.revealSilently();
+    this.dirty = true;
+    this.ensureRunning();
     if (this.noticeTimer != null) window.clearTimeout(this.noticeTimer);
     this.noticeTimer = window.setTimeout(() => {
       this.notice.classList.remove("show");
+      this.noticeActive = false;
+      this.root.classList.remove("notice-active");
       this.noticeTimer = null;
+      this.dirty = true;
+      if (!this.wasInIsland) this.fsm.mouseLeft();
+      this.ensureRunning();
     }, durationMs);
   }
 
@@ -1105,7 +1124,13 @@ export class Island {
         greetingActive || this.engine.busy || UploadSeq.isActive || viewAnimating;
 
     if (busy) {
-      requestAnimationFrame(this.frame);
+      // The compact, idle pill needs gentle motion, not a 60/120 Hz canvas
+      // redraw. Keep openings and active views at display speed.
+      if (State.mode === "compact" && !settling && State.effectiveState === "idle" && !State.musicPlaying) {
+        window.setTimeout(() => requestAnimationFrame(this.frame), 32);
+      } else {
+        requestAnimationFrame(this.frame);
+      }
     } else {
       this.running = false;
       Sound.idle();
@@ -1244,7 +1269,15 @@ export class Island {
       if (!power) return;
       const now = power.pluggedIn;
       this.root.classList.toggle("charging", now);
-      if (this.charging !== null && this.charging !== now) this.startPowerAnimation(now, power.level);
+      const low = now ? null : batteryWarningThreshold(power.level);
+      const warn = low !== null && (this.lastLowBatteryThreshold === null || low < this.lastLowBatteryThreshold);
+      if (warn) {
+        this.lastLowBatteryThreshold = low;
+        this.startPowerAnimation(false, power.level, true);
+      } else if (this.charging !== null && this.charging !== now) {
+        this.startPowerAnimation(now, power.level);
+      }
+      if (now) this.lastLowBatteryThreshold = null;
       this.charging = now;
     };
     void sync();
@@ -1253,7 +1286,7 @@ export class Island {
   }
 
   /** A brief Mochi performance inside the opened bar, in either power direction. */
-  private startPowerAnimation(pluggedIn: boolean, level: number) {
+  private startPowerAnimation(pluggedIn: boolean, level: number, lowBattery = false) {
     if (State.paused || State.pendingApproval) return;
     // forceHome cancels a pending collapse, so even a short auto-close setting
     // cannot fold the bar halfway through the power reaction.
@@ -1272,13 +1305,16 @@ export class Island {
     this.chargeCanvas.height = Math.round(canvasH * dpr);
     this.chargeCanvas.style.width = `${canvasW}px`;
     this.chargeCanvas.style.height = `${canvasH}px`;
-    this.chargeLabel.textContent = `${pluggedIn ? "Charging" : "On battery"} · ${level}%`;
+    this.chargeLabel.textContent = lowBattery
+      ? `Low battery · ${level}% — please plug in soon`
+      : `${pluggedIn ? "Charging" : "On battery"} · ${level}%`;
     this.chargePop.classList.toggle("unplugged", !pluggedIn);
+    this.chargePop.classList.toggle("low-battery", lowBattery);
     this.chargeIcon.textContent = pluggedIn ? "⚡" : "🔋";
     this.chargeEngine = new BotEngine();
     this.chargeEngine.particleOverhang = BOT_OVERHANG;
     this.chargeEngine.setOutfit(this.seasons.get(parseOutfit(State.settings.mochiOutfit)), true);
-    this.chargeEngine.setState(!pluggedIn && this.nightMood ? "sleeping" : "idle");
+    this.chargeEngine.setState(!pluggedIn && this.nightMood && !lowBattery ? "sleeping" : "idle");
     this.chargeEngine.danceBpm = 136;
     this.chargeEngine.setDancing(pluggedIn);
     this.chargeEngine.triggerEmote("surprised", 1.1);
@@ -1298,11 +1334,11 @@ export class Island {
       }
       if (elapsed >= 1150 && stage === 0) {
         stage = 1;
-        this.chargeEngine.triggerEmote(pluggedIn ? "proud" : this.nightMood ? "yawn" : "wink", 1.9);
+        this.chargeEngine.triggerEmote(lowBattery ? "yawn" : pluggedIn ? "proud" : this.nightMood ? "yawn" : "wink", 1.9);
         if (pluggedIn) this.chargeEngine.emit("spark", 8);
       } else if (elapsed >= 2800 && stage === 1) {
         stage = 2;
-        this.chargeEngine.triggerEmote(pluggedIn ? "love" : this.nightMood ? "yawn" : "happy", 1.7);
+        this.chargeEngine.triggerEmote(lowBattery ? "surprised" : pluggedIn ? "love" : this.nightMood ? "yawn" : "happy", 1.7);
       }
       const ctx = this.chargeCanvas.getContext("2d");
       if (ctx) {
@@ -1388,7 +1424,7 @@ export class Island {
     const expanded = State.mode === "expanded";
     const greetingActive = expanded && State.view === "greeting";
 
-    const live = expanded && !greetingActive;
+    const live = expanded && !greetingActive && !this.noticeActive;
     this.contentEl.style.opacity = live ? "1" : "0";
     // While the drop sequence owns the body its buttons are painted on the canvas
     // underneath, so only the header may keep taking clicks up here.

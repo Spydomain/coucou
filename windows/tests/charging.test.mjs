@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { installFakeDom } from "./fakedom.mjs";
 
 installFakeDom();
-const { Island } = await import("../src/island/island.ts");
+const { Island, batteryWarningThreshold } = await import("../src/island/island.ts");
 const { Bridge } = await import("../src/core/bridge.ts");
 const { State, DEFAULT_SETTINGS } = await import("../src/core/state.ts");
 
@@ -31,6 +31,44 @@ test("both power transitions start a reaction, but the initial reading does not"
     }
     assert.deepEqual(events, ["plug:63", "unplug:63"]);
     assert.equal(island.root.classList.contains("charging"), false);
+  } finally {
+    Bridge.powerStatus = originalPowerStatus;
+    window.setInterval = originalInterval;
+  }
+});
+
+test("low battery opens at 20, 10 and 5 percent without repeated popups", async () => {
+  assert.equal(batteryWarningThreshold(21), null);
+  assert.equal(batteryWarningThreshold(20), 20);
+  assert.equal(batteryWarningThreshold(10), 10);
+  assert.equal(batteryWarningThreshold(5), 5);
+  const island = Object.create(Island.prototype);
+  island.root = document.createElement("div");
+  island.charging = null;
+  island.lastLowBatteryThreshold = null;
+  const events = [];
+  island.startPowerAnimation = (pluggedIn, level, low) => events.push({ pluggedIn, level, low: low ?? false });
+  const statuses = [19, 18, 10, 5].map((level) => ({ pluggedIn: false, level }));
+  statuses.push({ pluggedIn: true, level: 6 }, { pluggedIn: false, level: 19 });
+  const originalPowerStatus = Bridge.powerStatus;
+  const originalInterval = window.setInterval;
+  let poll;
+  Bridge.powerStatus = async () => statuses.shift();
+  window.setInterval = (fn) => { poll = fn; return 1; };
+  try {
+    island.installBatteryMood();
+    await Promise.resolve();
+    for (let i = 1; i < 6; i++) {
+      poll();
+      await Promise.resolve();
+    }
+    assert.deepEqual(events, [
+      { pluggedIn: false, level: 19, low: true },
+      { pluggedIn: false, level: 10, low: true },
+      { pluggedIn: false, level: 5, low: true },
+      { pluggedIn: true, level: 6, low: false },
+      { pluggedIn: false, level: 19, low: true },
+    ]);
   } finally {
     Bridge.powerStatus = originalPowerStatus;
     window.setInterval = originalInterval;
@@ -86,6 +124,10 @@ test("plug and unplug open the bar, animate inside it, and end automatically", (
     assert.ok(!island.chargePop.classList.contains("show"));
     assert.ok(!island.root.classList.contains("charger-unplug"));
     assert.equal(frames.length, 0, "closing cancels the animation loop");
+
+    island.startPowerAnimation(false, 5, true);
+    assert.equal(island.chargeLabel.textContent, "Low battery · 5% — please plug in soon");
+    assert.ok(island.chargePop.classList.contains("low-battery"));
   } finally {
     globalThis.requestAnimationFrame = originalFrame;
   }
